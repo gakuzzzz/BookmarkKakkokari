@@ -29,27 +29,19 @@ class UserRepositoryOnSlick extends UserRepository with Tables {
     val error: Future[Option[UserError]] = for {
       e1 <- findById(user.id)
       e2 <- findByEmailAddress(user.emailAddress)
-    } yield
-      if (e1.isDefined)
-        Some(DuplicatedIdError)
-      else if (e2.isDefined)
-        Some(DuplicatedEmailAddressError)
-      else
-        None
+      dupId   = e1.map(_ => DuplicatedIdError)
+      dupMail = e2.map(_ => DuplicatedEmailAddressError)
+    } yield dupId orElse dupMail
 
     error.transformWith {
-      case Success(v) =>
-        Future.successful(
-          if (v.isDefined)
-            db.run(Users += entityToRow(user)).transformWith {
-              case Success(_) => Future.successful(Right(()))
-              case Failure(e) =>
-                Future.failed(UserInsertFailedException(user.id, e))
-            } else
-            Future(Left(v.get))
+      case Success(None)    =>
+        db.run(Users += entityToRow(user)).transform(
+          _ => Right(()),
+          e => UserInsertFailedException(user.id, e)
         )
-      case Failure(e) => Future.failed(UserInsertFailedException(user.id, e))
-    }.flatten
+      case Success(Some(v)) => Future(Left(v))
+      case Failure(e)       => Future.failed(UserInsertFailedException(user.id, e))
+    }
   }
 
   override def findById(
